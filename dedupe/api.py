@@ -71,7 +71,7 @@ class Matching(object):
         self._fingerprinter: Optional[blocking.Fingerprinter] = None
         self.data_model: datamodel.DataModel
         self.classifier: Classifier
-        self.predicates: List[dedupe.predicates.Predicate]
+        self.predicates: Sequence[dedupe.predicates.Predicate]
 
     @property
     def fingerprinter(self) -> blocking.Fingerprinter:
@@ -90,7 +90,7 @@ class IntegralMatching(Matching):
     """
 
     def score(self,
-              pairs: RecordPairs) -> numpy.ndarray:
+              pairs: RecordPairs) -> numpy.memmap:
         """
         Scores pairs of records. Returns pairs of tuples of records id and
         associated probabilites that the pair of records are match
@@ -1196,8 +1196,7 @@ class Dedupe(ActiveMatching, DedupeMatching):
                          data: Data,
                          training_file: TextIO = None,
                          sample_size: int = 1500,
-                         blocked_proportion: float = 0.9,
-                         original_length: int = None) -> None:
+                         blocked_proportion: float = 0.9) -> None:
         '''
         Initialize the active learner with your data and, optionally,
         existing training data.
@@ -1211,11 +1210,6 @@ class Dedupe(ActiveMatching, DedupeMatching):
             training_file: file object containing training data
             sample_size: Size of the sample to draw
             blocked_proportion: The proportion of record pairs to be sampled from similar records, as opposed to randomly selected pairs. Defaults to 0.9.
-            original_length: If `data` is a subsample of all your data,
-                             `original_length` should be the size of
-                             your complete data. By default,
-                             `original_length` defaults to the length of
-                             `data`.
 
         .. code:: python
 
@@ -1230,13 +1224,12 @@ class Dedupe(ActiveMatching, DedupeMatching):
 
         if training_file:
             self._read_training(training_file)
-        self._sample(data, sample_size, blocked_proportion, original_length)
+        self._sample(data, sample_size, blocked_proportion)
 
     def _sample(self,
                 data: Data,
                 sample_size: int = 15000,
-                blocked_proportion: float = 0.5,
-                original_length: int = None) -> None:
+                blocked_proportion: float = 0.5) -> None:
         '''Draw a sample of record pairs from the dataset
         (a mix of random pairs & pairs of similar records)
         and initialize active learning with this sample
@@ -1250,14 +1243,8 @@ class Dedupe(ActiveMatching, DedupeMatching):
 
         :param blocked_proportion: Proportion of the sample that will be blocked
 
-        :param original_length: Length of original data, should be set
-                                if `data` is a sample of full data
-
         '''
         self._checkData(data)
-
-        if not original_length:
-            original_length = len(data)
 
         # We need the active learner to know about all our
         # existing training data, so add them to data dictionary
@@ -1267,7 +1254,6 @@ class Dedupe(ActiveMatching, DedupeMatching):
                                                  data,
                                                  blocked_proportion,
                                                  sample_size,
-                                                 original_length,
                                                  index_include=examples)
 
         self.active_learner.mark(examples, y)
@@ -1293,9 +1279,7 @@ class Link(ActiveMatching):
                          data_2: Data,
                          training_file: Optional[TextIO] = None,
                          sample_size: int = 15000,
-                         blocked_proportion: float = 0.5,
-                         original_length_1: Optional[int] = None,
-                         original_length_2: Optional[int] = None) -> None:
+                         blocked_proportion: float = 0.5) -> None:
         '''
         Initialize the active learner with your data and, optionally,
         existing training data.
@@ -1314,16 +1298,6 @@ class Link(ActiveMatching):
                                 be sampled from similar records,
                                 as opposed to randomly selected
                                 pairs. Defaults to 0.5.
-            original_length_1: If `data_1` is a subsample of your first dataset,
-                               `original_length_1` should be the size of
-                               the complete first dataset. By default,
-                               `original_length_1` defaults to the length of
-                               `data_1`
-            original_length_2: If `data_2` is a subsample of your first dataset,
-                               `original_length_2` should be the size of
-                               the complete first dataset. By default,
-                               `original_length_2` defaults to the length of
-                               `data_2`
 
         .. code:: python
 
@@ -1339,17 +1313,13 @@ class Link(ActiveMatching):
         self._sample(data_1,
                      data_2,
                      sample_size,
-                     blocked_proportion,
-                     original_length_1,
-                     original_length_2)
+                     blocked_proportion)
 
     def _sample(self,
                 data_1: Data,
                 data_2: Data,
                 sample_size: int = 15000,
-                blocked_proportion: float = 0.5,
-                original_length_1: int = None,
-                original_length_2: int = None) -> None:
+                blocked_proportion: float = 0.5) -> None:
         '''
         Draws a random sample of combinations of records from
         the first and second datasets, and initializes active
@@ -1373,8 +1343,6 @@ class Link(ActiveMatching):
                                                  data_2,
                                                  blocked_proportion,
                                                  sample_size,
-                                                 original_length_1,
-                                                 original_length_2,
                                                  index_include=examples)
 
         self.active_learner.mark(examples, y)

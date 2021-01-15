@@ -13,12 +13,15 @@ import math
 
 from typing import (Dict, Sequence, Iterable, Tuple, List,
                     Union, FrozenSet)
+from typing_extensions import TypedDict
 
 from . import blocking, core
 from .predicates import Predicate
 
 logger = logging.getLogger(__name__)
 
+RedBlue = TypedDict('RedBlue', {'matches': FrozenSet[int], 'all': FrozenSet[int]})
+RBCover = Dict[Predicate, RedBlue]
 Cover = Dict[Predicate, FrozenSet[int]]
 
 
@@ -54,7 +57,7 @@ class BlockLearner(ABC):
         else:
             raise ValueError('candidate_type is not valid')
 
-        searcher = BranchBound(target_cover, 2500)
+        searcher = BranchBound(target_cover, 5000)
         final_predicates = searcher.search(candidate_cover)
 
         logger.info('Final predicate set:')
@@ -65,22 +68,22 @@ class BlockLearner(ABC):
 
     def simple_candidates(self,
                           match_cover: Cover,
-                          comparison_cover: Cover) -> Cover:
+                          comparison_cover: Cover) -> RBCover:
         candidates = {}
         for predicate, coverage in match_cover.items():
-            predicate.count = self.estimate(comparison_cover[predicate])  # type: ignore
-            candidates[predicate] = coverage.copy()
+            candidates[predicate] = {'matches': coverage.copy(),
+                                     'all': comparison_cover[predicate].copy()}
 
         return candidates
 
     def random_forest_candidates(self,
                                  match_cover: Cover,
-                                 comparison_cover: Cover) -> Cover:
+                                 comparison_cover: Cover) -> RBCover:
         predicates = list(match_cover)
         matches = list(frozenset.union(*match_cover.values()))
         pred_sample_size = max(int(math.sqrt(len(predicates))), 5)
         candidates = {}
-        K = 3
+        K = 4
 
         n_samples = 5000
         for _ in range(n_samples):
@@ -99,13 +102,9 @@ class BlockLearner(ABC):
             covered_sample_matches = InfiniteSet()
 
             def score(predicate: Predicate) -> float:
-                try:
-                    return (len(covered_sample_matches &
-                                sample_match_cover[predicate]) /
-                            self.estimate(covered_comparisons &
-                                          comparison_cover[predicate]))
-                except ZeroDivisionError:
-                    return 0.
+                return (len(covered_sample_matches &
+                            sample_match_cover[predicate]) /
+                        max(len(covered_comparisons & comparison_cover[predicate]), 1))
 
             for _ in range(K):
                 next_predicate = max(sample_predicates, key=score)
@@ -115,10 +114,10 @@ class BlockLearner(ABC):
                     candidate = next_predicate
 
                 covered_comparisons &= comparison_cover[next_predicate]
-                candidate.count = self.estimate(covered_comparisons)  # type: ignore
-
                 covered_matches &= match_cover[next_predicate]
-                candidates[candidate] = covered_matches
+
+                candidates[candidate] = {'matches': covered_matches,
+                                         'all': covered_comparisons}
 
                 covered_sample_matches &= sample_match_cover[next_predicate]
 
@@ -139,10 +138,6 @@ class BlockLearner(ABC):
 
         return predicate_cover
 
-    @abstractmethod
-    def estimate(self, comparisons) -> float:
-        ...
-
     blocker: blocking.Fingerprinter
     comparison_cover: Cover
 
@@ -150,11 +145,6 @@ class BlockLearner(ABC):
 class DedupeBlockLearner(BlockLearner):
 
     def __init__(self, predicates, sampled_records, data):
-
-        N = sampled_records.original_length
-        N_s = len(sampled_records)
-
-        self.r = (N * (N - 1)) / (N_s * (N_s - 1))
 
         self.blocker = blocking.Fingerprinter(predicates)
         self.blocker.index_all(data)
@@ -191,26 +181,10 @@ class DedupeBlockLearner(BlockLearner):
 
         return cover
 
-    def estimate(self, comparisons):
-        # Result due to Stefano Allesina and Jacopo Grilli,
-        # details forthcoming
-        #
-        # This estimates the total number of comparisons a blocking
-        # rule will produce.
-
-        return self.r * len(comparisons)
-
 
 class RecordLinkBlockLearner(BlockLearner):
 
     def __init__(self, predicates, sampled_records_1, sampled_records_2, data_2):
-
-        r_a = ((sampled_records_1.original_length) /
-               len(sampled_records_1))
-        r_b = ((sampled_records_2.original_length) /
-               len(sampled_records_2))
-
-        self.r = r_a * r_b
 
         self.blocker = blocking.Fingerprinter(predicates)
         self.blocker.index_all(data_2)
@@ -246,11 +220,6 @@ class RecordLinkBlockLearner(BlockLearner):
 
         return cover
 
-    def estimate(self, comparisons):
-        # https://stats.stackexchange.com/a/465060/82
-
-        return self.r * len(comparisons)
-
 
 class BranchBound(object):
     def __init__(self, target: int, max_calls: int) -> None:
@@ -258,11 +227,11 @@ class BranchBound(object):
         self.calls: int = max_calls
 
         self.cheapest_score: float = float('inf')
-        self.original_cover: Cover = {}
+        self.original_cover: RBCover = {}
         self.cheapest: Tuple[Predicate, ...] = ()
 
     def search(self,
-               candidates: Cover,
+               candidates: RBCover,
                partial: Tuple[Predicate, ...] = ()) -> Tuple[Predicate, ...]:
         if self.calls <= 0:
             return self.cheapest
@@ -271,12 +240,15 @@ class BranchBound(object):
             self.original_cover = candidates.copy()
 
         self.calls -= 1
+        if self.calls % 1000 == 0:
+            print('call', self.calls)
 
         covered = self.covered(partial)
         score = self.score(partial)
 
         if covered >= self.target:
             if score < self.cheapest_score:
+                print(score)
                 self.cheapest = partial
                 self.cheapest_score = score
 
@@ -285,7 +257,7 @@ class BranchBound(object):
 
             candidates = {p: cover
                           for p, cover in candidates.items()
-                          if p.count < window}  # type: ignore
+                          if len(cover['all']) < window}  # type: ignore
 
             reachable = self.reachable(candidates) + covered
 
@@ -296,7 +268,7 @@ class BranchBound(object):
                 best = max(candidates, key=order_by)
 
                 remaining = self.uncovered_by(candidates,
-                                              candidates[best])
+                                              best)
                 self.search(remaining, partial + (best,))
                 del remaining
 
@@ -308,44 +280,49 @@ class BranchBound(object):
 
     @staticmethod
     def order_by(candidates: Cover, p: Predicate) -> Tuple[int, float]:
-        return (len(candidates[p]), -p.count)  # type: ignore
+        return len(candidates[p]['matches'])/max(len(candidates[p]['all']), 1)  # type: ignore
 
-    @staticmethod
-    def score(partial: Iterable[Predicate]) -> float:
-        return sum(p.count for p in partial)  # type: ignore
+    def score(self, partial: Iterable[Predicate]) -> int:
+        if partial:
+            return len(frozenset.union(*(self.original_cover[p]['all'] for p in partial)))
+        else:
+            return 0
 
     def covered(self, partial: Tuple[Predicate, ...]) -> int:
         if partial:
-            return len(frozenset.union(*(self.original_cover[p]
+            return len(frozenset.union(*(self.original_cover[p]['matches']
                                          for p in partial)))
         else:
             return 0
 
     @staticmethod
-    def reachable(dupe_cover: Cover) -> int:
+    def reachable(dupe_cover: RBCover) -> int:
         if dupe_cover:
-            return len(frozenset.union(*dupe_cover.values()))
+            return len(frozenset.union(*(cover['matches'] for cover in dupe_cover.values())))
         else:
             return 0
 
     @staticmethod
-    def remove_dominated(coverage: Cover, dominator: Predicate) -> Cover:
+    def remove_dominated(coverage: RBCover, dominator: Predicate) -> RBCover:
         dominant_cover = coverage[dominator]
 
         for pred, cover in coverage.copy().items():
-            if (dominator.count <= pred.count and  # type: ignore
-                    dominant_cover >= cover):
+            if (dominant_cover['all'] <= cover['all'] and  # type: ignore
+                    dominant_cover['matches'] >= cover['matches']):
                 del coverage[pred]
 
         return coverage
 
     @staticmethod
-    def uncovered_by(coverage: Cover, covered: frozenset) -> Cover:
+    def uncovered_by(coverage: RBCover, pred: Predicate) -> RBCover:
+        pred_matches = coverage[pred]['matches']
+        pred_all = coverage[pred]['all']
         remaining = {}
         for predicate, uncovered in coverage.items():
-            still_uncovered = uncovered - covered
+            still_uncovered = uncovered['matches'] - pred_matches
             if still_uncovered:
-                remaining[predicate] = still_uncovered
+                remaining[predicate] = {'matches': still_uncovered,
+                                        'all': uncovered['all'] - pred_all}
 
         return remaining
 
@@ -361,7 +338,7 @@ class InfiniteSet(object):
 
 class Resampler(object):
 
-    def __init__(self, sequence: Sequence):
+    def __init__(self, sequence: Sequence[int]):
 
         sampled = random.choices(sequence, k=len(sequence))
 
