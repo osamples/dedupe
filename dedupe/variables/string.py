@@ -53,8 +53,7 @@ class ShortStringType(BaseStringType):
                              predicates.doubleMetaphone,
                              predicates.metaphoneToken))
 
-    _index_predicates = [predicates.TfidfNGramCanopyPredicate,
-                         predicates.TfidfNGramSearchPredicate]
+    _index_predicates = []
     _index_thresholds = (0.2, 0.4, 0.6, 0.8)
 
     def __init__(self, definition):
@@ -69,9 +68,7 @@ class ShortStringType(BaseStringType):
 class StringType(ShortStringType):
     type = "String"
 
-    _index_predicates = [predicates.TfidfNGramCanopyPredicate,
-                         predicates.TfidfNGramSearchPredicate,
-                         predicates.TfidfTextCanopyPredicate,
+    _index_predicates = [predicates.TfidfTextCanopyPredicate,
                          predicates.TfidfTextSearchPredicate]
 
 

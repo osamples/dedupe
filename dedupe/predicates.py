@@ -241,8 +241,7 @@ class TfidfSearchPredicate(SearchPredicate, TfidfPredicate):
 class TfidfTextPredicate(object):
 
     def preprocess(self, doc):
-        return tuple(words(doc))
-
+        return doc
 
 class TfidfSetPredicate(object):
     def preprocess(self, doc):
