@@ -6,7 +6,10 @@ try:
 except ImportError:
     raise ImportError("setuptools module required, please go to https://pypi.python.org/pypi/setuptools and follow the instructions for installing setuptools")
 
-from Cython.Build import cythonize
+try:
+    from Cython.Build import cythonize
+except ImportError:
+    raise ImportError("cython module required")
 
 install_requires = ['fastcluster',
                     'dedupe-hcluster',
