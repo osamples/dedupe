@@ -3,3 +3,4 @@ pytest-cov
 mock
 mypy
 flake8
+cython
